@@ -107,4 +107,8 @@ config ZMK_INPUT_AMS_AS5600_LOG_AGC
 	bool "Print AGC value to console, to help with tuning the distance between the magnet and the sensor"
 	default n
 
+config ZMK_INPUT_AMS_AS5600_INIT_PRIORITY
+	int "Drivers init priority"
+	default 90
+
 endif # ZMK_INPUT_AMS_AS5600

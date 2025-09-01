@@ -177,6 +177,15 @@ Enable the watchdog timer to save power by automatically switching to LPM3 mode 
 CONFIG_ZMK_INPUT_AMS_AS5600_WATCHDOG_TIMER=y
 ```
 
+### Init priority
+
+The initialization priority can be changed with `CONFIG_ZMK_INPUT_AMS_AS5600_INIT_PRIORITY`.
+Default is 90.
+
+``` ini
+CONFIG_ZMK_INPUT_AMS_AS5600_INIT_PRIORITY=90
+```
+
 ## Troubleshooting
 
 ### Sensor is not triggering any scroll events

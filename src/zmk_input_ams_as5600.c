@@ -182,7 +182,7 @@ static int zmk_input_ams_as5600_initialize(const struct device *dev) {
                                                                    \
     DEVICE_DT_INST_DEFINE(n, zmk_input_ams_as5600_initialize, NULL,              \
                           &zmk_input_ams_as5600_data##n, &zmk_input_ams_as5600_cfg##n,         \
-                          POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, \
+                          POST_KERNEL, CONFIG_ZMK_INPUT_AMS_AS5600_INIT_PRIORITY, \
                           NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(ZMK_INPUT_AMS_AS5600_INIT)
