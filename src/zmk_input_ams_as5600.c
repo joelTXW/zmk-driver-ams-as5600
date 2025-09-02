@@ -11,6 +11,7 @@ LOG_MODULE_REGISTER(zmk_input_ams_as5600, CONFIG_INPUT_LOG_LEVEL);
 
 #define ZMK_INPUT_AMS_AS5600_CONF_REGISTER 0x07
 #define ZMK_INPUT_AMS_AS5600_STATUS_REGISTER 0x0B
+#define ZMK_INPUT_AMS_AS5600_RAW_ANGLE_REGISTER 0x0C
 #define ZMK_INPUT_AMS_AS5600_AGC_REGISTER 0x1A
 
 #define ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_AGC_UNDERFLOW_BIT 3
@@ -20,6 +21,19 @@ LOG_MODULE_REGISTER(zmk_input_ams_as5600, CONFIG_INPUT_LOG_LEVEL);
 #define ZMK_INPUT_AMS_AS5600_PULSES_PER_REV 4096
 
 #define ZMK_INPUT_AMS_AS5600_LOG_PREFIX "AS5600: "
+
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_MONITORING)
+#define ZMK_INPUT_AMS_AS5600_READ_BUFFER_SIZE 3
+#define ZMK_INPUT_AMS_AS5600_READ_OFFSET_STATUS 0
+#define ZMK_INPUT_AMS_AS5600_READ_OFFSET_ANGLE_HI 1
+#define ZMK_INPUT_AMS_AS5600_READ_OFFSET_ANGLE_LO 2
+#define ZMK_INPUT_AMS_AS5600_READ_REGISTER ZMK_INPUT_AMS_AS5600_STATUS_REGISTER
+#else
+#define ZMK_INPUT_AMS_AS5600_READ_BUFFER_SIZE 2
+#define ZMK_INPUT_AMS_AS5600_READ_OFFSET_ANGLE_HI 0
+#define ZMK_INPUT_AMS_AS5600_READ_OFFSET_ANGLE_LO 1
+#define ZMK_INPUT_AMS_AS5600_READ_REGISTER ZMK_INPUT_AMS_AS5600_RAW_ANGLE_REGISTER
+#endif
 
 #define GET_BIT(reg, pos) ((reg) & (1 << (pos)))
 
@@ -59,8 +73,10 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
     struct zmk_input_ams_as5600_data *data = dev->data;
 
     int err;
-    uint8_t read_buffer[3];
+    uint8_t read_buffer[ZMK_INPUT_AMS_AS5600_READ_BUFFER_SIZE];
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_MONITORING)
     uint8_t status;
+#endif
     uint16_t angle;
     int32_t pulses;
 
@@ -71,16 +87,17 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
 
     /* Read status and angle */
     err = i2c_burst_read_dt(&(config->i2c_port),
-                            ZMK_INPUT_AMS_AS5600_STATUS_REGISTER,
+                            ZMK_INPUT_AMS_AS5600_READ_REGISTER,
                             &read_buffer[0],
                             sizeof(read_buffer));
     if (err) {
         LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "I2C read data failed: %d", err);
         return err;
     }
-    status = read_buffer[0];
 
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_MONITORING)
     /* Check status bits */
+    status = read_buffer[ZMK_INPUT_AMS_AS5600_READ_OFFSET_STATUS];
     if (GET_BIT(status, ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_AGC_OVERFLOW_BIT)) {
         LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "AGC maximum gain overflow, magnet too weak");
         return -1;
@@ -93,9 +110,10 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
         LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Magnet not detected");
         return -1;
     }
+#endif
 
     /* Calculate angle and pulses */
-    angle = ((uint16_t)read_buffer[1] << 8) | read_buffer[2];
+    angle = ((uint16_t)read_buffer[ZMK_INPUT_AMS_AS5600_READ_OFFSET_ANGLE_HI] << 8) | read_buffer[ZMK_INPUT_AMS_AS5600_READ_OFFSET_ANGLE_LO];
     pulses = angle - data->last_angle;
     if (pulses > (ZMK_INPUT_AMS_AS5600_PULSES_PER_REV / 2)) {
         pulses -= ZMK_INPUT_AMS_AS5600_PULSES_PER_REV;

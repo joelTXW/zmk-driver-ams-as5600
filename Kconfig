@@ -103,6 +103,12 @@ config ZMK_INPUT_AMS_AS5600_WATCHDOG_TIMER
 	bool "Enable watchdog timer to allow saving power by switching into LMP3 if the angle stays within the watchdog threshold of 4 LSB for at least one minute"
 	default n
 
+config ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_MONITORING
+	bool "Check status register for errors"
+	default y
+	help
+	  Enable checking the status register for errors AGC overflows, underflows or no magnet detected.
+
 config ZMK_INPUT_AMS_AS5600_LOG_AGC
 	bool "Print AGC value to console, to help with tuning the distance between the magnet and the sensor"
 	default n

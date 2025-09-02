@@ -177,6 +177,18 @@ Enable the watchdog timer to save power by automatically switching to LPM3 mode 
 CONFIG_ZMK_INPUT_AMS_AS5600_WATCHDOG_TIMER=y
 ```
 
+### Status register monitoring
+
+The driver monitors the sensor's status register to ensure reliable measurements by default.
+Input events are blocked when the magnetic field is too strong/weak or no magnet is detected.
+This prevents erratic scroll behavior.
+
+If needed, status register monitoring can be disabled (not recommended):
+
+``` ini
+CONFIG_ZMK_INPUT_AMS_AS5600_STATUS_REGISTER_MONITORING=n
+```
+
 ### Init priority
 
 The initialization priority can be changed with `CONFIG_ZMK_INPUT_AMS_AS5600_INIT_PRIORITY`.
@@ -191,7 +203,7 @@ CONFIG_ZMK_INPUT_AMS_AS5600_INIT_PRIORITY=90
 ### Sensor is not triggering any scroll events
 
 - Check wiring and I²C address of the sensor
-- Magnet distance might not be set up properly. Please check for error logs and [set up the magnet distance](#setting-up-the-distance-between-sensor-and-magnet)
+- Magnet distance might not be set up properly. Please enable [status register monitoring](#status-register-monitoring), review for error logs and [set up the magnet distance](#setting-up-the-distance-between-sensor-and-magnet)
 
 ## Limitations
 
