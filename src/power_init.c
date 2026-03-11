@@ -1,21 +1,15 @@
 #include <zephyr/kernel.h>
-#include <zephyr/drivers/gpio.h>
+#include <hal/nrf_gpio.h>
 
 static int power_init(void)
 {
-    const struct device *gpio = device_get_binding("GPIO_0");
-
-    if (!gpio) {
-        return 0;
-    }
-
     /* Configure pins as outputs */
-    gpio_pin_configure(gpio, 2, GPIO_OUTPUT);
-    gpio_pin_configure(gpio, 30, GPIO_OUTPUT);
+    nrf_gpio_cfg_output(2);   // P0.02 MOSFET
+    nrf_gpio_cfg_output(30);  // P0.30 LED
 
-    /* Drive them LOW */
-    gpio_pin_set(gpio, 2, 0);
-    gpio_pin_set(gpio, 30, 0);
+    /* Drive LOW */
+    nrf_gpio_pin_clear(2);
+    nrf_gpio_pin_clear(30);
 
     return 0;
 }
