@@ -9,10 +9,15 @@ static int power_init(void)
         return 0;
     }
 
-    /* P0.02 = MOSFET gate */
-    gpio_pin_configure(gpio, 2, GPIO_OUTPUT_ACTIVE);
+    /* Configure pins as outputs */
+    gpio_pin_configure(gpio, 2, GPIO_OUTPUT);
+    gpio_pin_configure(gpio, 30, GPIO_OUTPUT);
+
+    /* Drive them LOW */
+    gpio_pin_set(gpio, 2, 0);
+    gpio_pin_set(gpio, 30, 0);
 
     return 0;
 }
 
-SYS_INIT(power_init, APPLICATION, 0);
+SYS_INIT(power_init, PRE_KERNEL_1, 0);
