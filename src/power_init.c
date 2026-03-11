@@ -1,5 +1,6 @@
 #include <zephyr/kernel.h>
 #include <hal/nrf_gpio.h>
+#include <zephyr/init.h>
 
 static int power_init(void)
 {
