@@ -36,9 +36,7 @@ struct zmk_pointing_resolution_multipliers {
     uint8_t hor_wheel;
 };
 
-struct zmk_endpoint_instance zmk_endpoint_get_selected(void);
-struct zmk_pointing_resolution_multipliers
-zmk_pointing_resolution_multipliers_get_profile(struct zmk_endpoint_instance endpoint);
+int zmk_ble_active_profile_index(void);
 void zmk_pointing_resolution_multipliers_set_profile(
     struct zmk_pointing_resolution_multipliers multipliers, struct zmk_endpoint_instance endpoint);
 #endif
@@ -89,16 +87,28 @@ struct zmk_input_ams_as5600_data {
 
 #if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
 static inline void zmk_input_ams_as5600_apply_resolution_multiplier(void) {
-    struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
-    struct zmk_pointing_resolution_multipliers multipliers =
-        zmk_pointing_resolution_multipliers_get_profile(endpoint);
+    struct zmk_pointing_resolution_multipliers multipliers = {
+        .wheel = CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION,
+        .hor_wheel = CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION,
+    };
 
-    if (multipliers.wheel == CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION) {
-        return;
+#if IS_ENABLED(CONFIG_ZMK_BLE)
+    int profile = zmk_ble_active_profile_index();
+    if (profile >= 0) {
+        struct zmk_endpoint_instance ble_endpoint = {
+            .transport = ZMK_TRANSPORT_BLE,
+            .ble = {.profile_index = profile},
+        };
+        zmk_pointing_resolution_multipliers_set_profile(multipliers, ble_endpoint);
     }
+#endif
 
-    multipliers.wheel = CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION;
-    zmk_pointing_resolution_multipliers_set_profile(multipliers, endpoint);
+#if IS_ENABLED(CONFIG_ZMK_USB)
+    struct zmk_endpoint_instance usb_endpoint = {
+        .transport = ZMK_TRANSPORT_USB,
+    };
+    zmk_pointing_resolution_multipliers_set_profile(multipliers, usb_endpoint);
+#endif
 }
 #endif
 
