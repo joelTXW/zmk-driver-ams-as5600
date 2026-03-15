@@ -79,6 +79,19 @@ as5600_listener: as5600_listener {
     };
 ```
 
+    ### HID wheel resolution multiplier (usage 0x48)
+
+    If `CONFIG_ZMK_POINTING_SMOOTH_SCROLLING=y` is enabled, the driver can set HID
+    resolution multipliers directly from firmware:
+
+    ``` ini
+    CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER=y
+    CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION=14
+    CONFIG_ZMK_INPUT_AMS_AS5600_HID_HWHEEL_RESOLUTION=14
+    ```
+
+    Valid range is `0..15` (`15` is highest resolution).
+
 ## Setting up the distance between sensor and magnet
 
 The sensor requires proper positioning relative to the magnet to function correctly. While the datasheet recommends 0.5–3 mm, the optimal distance varies depending on your specific magnet.
