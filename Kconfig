@@ -113,30 +113,6 @@ config ZMK_INPUT_AMS_AS5600_LOG_AGC
 	bool "Print AGC value to console, to help with tuning the distance between the magnet and the sensor"
 	default n
 
-config ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER
-	bool "Set HID wheel resolution multiplier (usage 0x48) from firmware"
-	default y
-	depends on ZMK_POINTING_SMOOTH_SCROLLING
-	help
-	  Sets the HID wheel/horizontal-wheel resolution multiplier values directly
-	  from firmware instead of relying on host-provided values.
-
-config ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION
-	int "HID wheel resolution multiplier value"
-	range 0 15
-	default 15
-	depends on ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER
-	help
-	  HID 0x48 wheel resolution value in range 0..15.
-
-config ZMK_INPUT_AMS_AS5600_HID_HWHEEL_RESOLUTION
-	int "HID horizontal wheel resolution multiplier value"
-	range 0 15
-	default 15
-	depends on ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER
-	help
-	  HID 0x48 horizontal wheel resolution value in range 0..15.
-
 config ZMK_INPUT_AMS_AS5600_INIT_PRIORITY
 	int "Drivers init priority"
 	default 90
