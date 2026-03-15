@@ -5,6 +5,11 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
 
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
+#include <zmk/endpoints.h>
+#include <zmk/pointing/resolution_multipliers.h>
+#endif
+
 #include "zmk_input_ams_as5600/zmk_input_ams_as5600_config.h"
 
 LOG_MODULE_REGISTER(zmk_input_ams_as5600, CONFIG_INPUT_LOG_LEVEL);
@@ -48,6 +53,21 @@ struct zmk_input_ams_as5600_data {
     struct k_timer timer;
     struct k_work work;
 };
+
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
+static inline void zmk_input_ams_as5600_apply_resolution_multiplier(void) {
+    struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
+    struct zmk_pointing_resolution_multipliers multipliers =
+        zmk_pointing_resolution_multipliers_get_profile(endpoint);
+
+    if (multipliers.wheel == CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION) {
+        return;
+    }
+
+    multipliers.wheel = CONFIG_ZMK_INPUT_AMS_AS5600_HID_WHEEL_RESOLUTION;
+    zmk_pointing_resolution_multipliers_set_profile(multipliers, endpoint);
+}
+#endif
 
 #if IS_ENABLED(ZMK_INPUT_AMS_AS5600_LOG_AGC)
 static void zmk_input_ams_as5600_log_agc(const struct device *dev) {
@@ -133,6 +153,9 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
 
     /* Only report input when rotation was detected */
     if (pulses) {
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
+        zmk_input_ams_as5600_apply_resolution_multiplier();
+#endif
         err = input_report_rel(dev, INPUT_REL_WHEEL, pulses, true, K_FOREVER);
         if (err) {
             LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Failed to report input value: %d", err);
