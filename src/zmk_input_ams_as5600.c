@@ -173,7 +173,6 @@ static int zmk_input_ams_as5600_set_power(const struct device *dev, bool on) {
     data->sensor_powered = on;
     if (!on) {
         data->sensor_configured = false;
-        data->last_angle_initialized = false;
         data->scaled_remainder = 0;
     }
 
@@ -191,7 +190,6 @@ static int zmk_input_ams_as5600_power_on_and_prepare(const struct device *dev) {
         }
         k_sleep(K_MSEC(CONFIG_ZMK_INPUT_AMS_AS5600_SENSOR_STARTUP_DELAY_MS));
         data->sensor_configured = false;
-        data->last_angle_initialized = false;
         data->scaled_remainder = 0;
     }
 
