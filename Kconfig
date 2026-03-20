@@ -10,10 +10,61 @@ menuconfig ZMK_INPUT_AMS_AS5600
 if ZMK_INPUT_AMS_AS5600
 
 config ZMK_INPUT_AMS_AS5600_POLL_INTERVAL
-	int "Sample period between sensor reads in ms"
+	int "Legacy sample period between sensor reads in ms"
 	default 20
 	help
-	  Sample period between sensor reads in ms
+	  Legacy option kept for compatibility. New behavior uses
+	  ZMK_INPUT_AMS_AS5600_ACTIVE_POLL_INTERVAL and
+	  ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL.
+
+config ZMK_INPUT_AMS_AS5600_ACTIVE_POLL_INTERVAL
+	int "Active polling interval in ms"
+	default ZMK_INPUT_AMS_AS5600_POLL_INTERVAL
+	range 1 1000
+	help
+	  Polling interval while movement is active.
+
+config ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL
+	int "Idle polling interval in ms"
+	default 500
+	range 10 60000
+	help
+	  Polling interval while idling with the sensor power-gated off.
+
+config ZMK_INPUT_AMS_AS5600_SENSOR_STARTUP_DELAY_MS
+	int "Sensor startup delay in ms"
+	default 2
+	range 1 100
+	help
+	  Delay after powering the AS5600 before attempting I2C reads.
+
+config ZMK_INPUT_AMS_AS5600_INACTIVITY_TIMEOUT_MS
+	int "Inactivity timeout in ms"
+	default 3000
+	range 10 60000
+	help
+	  Time without movement before returning to idle mode and powering off the sensor.
+
+config ZMK_INPUT_AMS_AS5600_MOVEMENT_THRESHOLD
+	int "Movement threshold in raw counts"
+	default 3
+	range 1 2048
+	help
+	  Minimum absolute delta required to detect movement and emit scroll events.
+
+config ZMK_INPUT_AMS_AS5600_SCROLL_SCALE_MULTIPLIER
+	int "Scroll scaling multiplier"
+	default 1
+	range 1 64
+	help
+	  Numerator for scroll output scaling.
+
+config ZMK_INPUT_AMS_AS5600_SCROLL_SCALE_DIVISOR
+	int "Scroll scaling divisor"
+	default 1
+	range 1 64
+	help
+	  Denominator for scroll output scaling.
 
 choice ZMK_INPUT_AMS_AS5600_POWER_MODE
 	prompt "Power Mode"

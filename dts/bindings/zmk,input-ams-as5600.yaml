@@ -4,3 +4,11 @@ description: |
 include: [i2c-device.yaml]
 
 compatible: "zmk,input-ams-as5600"
+
+properties:
+  power-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      Optional GPIO controlling AS5600 power through an external MOSFET.
+      Configure as active-low when LOW turns the sensor ON.

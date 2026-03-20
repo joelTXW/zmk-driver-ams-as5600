@@ -1,7 +1,9 @@
 #define DT_DRV_COMPAT zmk_input_ams_as5600
 
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/input/input.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/byteorder.h>
 
@@ -75,14 +77,24 @@ LOG_MODULE_REGISTER(zmk_input_ams_as5600, CONFIG_INPUT_LOG_LEVEL);
 
 struct zmk_input_ams_as5600_config {
     struct i2c_dt_spec i2c_port;
+    struct gpio_dt_spec power_gpio;
+};
+
+enum zmk_input_ams_as5600_mode {
+    ZMK_INPUT_AMS_AS5600_MODE_IDLE,
+    ZMK_INPUT_AMS_AS5600_MODE_ACTIVE,
 };
 
 struct zmk_input_ams_as5600_data {
     const struct device *dev;
     uint16_t last_angle;
     bool last_angle_initialized;
-    struct k_timer timer;
-    struct k_work work;
+    bool sensor_powered;
+    bool sensor_configured;
+    enum zmk_input_ams_as5600_mode mode;
+    int64_t last_movement_ms;
+    int32_t scaled_remainder;
+    struct k_work_delayable work;
 };
 
 #if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
@@ -112,7 +124,7 @@ static inline void zmk_input_ams_as5600_apply_resolution_multiplier(void) {
 }
 #endif
 
-#if IS_ENABLED(ZMK_INPUT_AMS_AS5600_LOG_AGC)
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_LOG_AGC)
 static void zmk_input_ams_as5600_log_agc(const struct device *dev) {
     const struct zmk_input_ams_as5600_config *config = dev->config;
 
@@ -131,7 +143,83 @@ static void zmk_input_ams_as5600_log_agc(const struct device *dev) {
 }
 #endif
 
-static int zmk_input_ams_as5600_process(const struct device *dev) {
+static int zmk_input_ams_as5600_write_configuration(const struct device *dev) {
+    const struct zmk_input_ams_as5600_config *config = dev->config;
+
+    return i2c_burst_write_dt(&(config->i2c_port), ZMK_INPUT_AMS_AS5600_CONF_REGISTER,
+                              (const uint8_t *)&ZMK_INPUT_AMS_AS5600_CONFIG,
+                              sizeof(ZMK_INPUT_AMS_AS5600_CONFIG));
+}
+
+static int zmk_input_ams_as5600_set_power(const struct device *dev, bool on) {
+    const struct zmk_input_ams_as5600_config *config = dev->config;
+    struct zmk_input_ams_as5600_data *data = dev->data;
+
+    if (config->power_gpio.port == NULL) {
+        data->sensor_powered = true;
+        return 0;
+    }
+
+    if (data->sensor_powered == on) {
+        return 0;
+    }
+
+    int err = gpio_pin_set_dt(&config->power_gpio, on ? 1 : 0);
+    if (err) {
+        LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Failed to set sensor power: %d", err);
+        return err;
+    }
+
+    data->sensor_powered = on;
+    if (!on) {
+        data->sensor_configured = false;
+        data->last_angle_initialized = false;
+        data->scaled_remainder = 0;
+    }
+
+    return 0;
+}
+
+static int zmk_input_ams_as5600_power_on_and_prepare(const struct device *dev) {
+    struct zmk_input_ams_as5600_data *data = dev->data;
+    int err;
+
+    if (!data->sensor_powered) {
+        err = zmk_input_ams_as5600_set_power(dev, true);
+        if (err) {
+            return err;
+        }
+        k_sleep(K_MSEC(CONFIG_ZMK_INPUT_AMS_AS5600_SENSOR_STARTUP_DELAY_MS));
+        data->sensor_configured = false;
+        data->last_angle_initialized = false;
+        data->scaled_remainder = 0;
+    }
+
+    if (!data->sensor_configured) {
+        err = zmk_input_ams_as5600_write_configuration(dev);
+        if (err) {
+            LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Failed to write configuration: %d", err);
+            return err;
+        }
+        data->sensor_configured = true;
+    }
+
+    return 0;
+}
+
+static int zmk_input_ams_as5600_scale_pulses(struct zmk_input_ams_as5600_data *data, int32_t pulses,
+                                             int32_t *scaled) {
+    int32_t accumulated =
+        pulses * CONFIG_ZMK_INPUT_AMS_AS5600_SCROLL_SCALE_MULTIPLIER + data->scaled_remainder;
+
+    *scaled = accumulated / CONFIG_ZMK_INPUT_AMS_AS5600_SCROLL_SCALE_DIVISOR;
+    data->scaled_remainder = accumulated % CONFIG_ZMK_INPUT_AMS_AS5600_SCROLL_SCALE_DIVISOR;
+
+    return 0;
+}
+
+static int zmk_input_ams_as5600_process(const struct device *dev, int32_t *reported_pulses,
+                                        bool *movement_detected) {
     const struct zmk_input_ams_as5600_config *config = dev->config;
     struct zmk_input_ams_as5600_data *data = dev->data;
 
@@ -143,7 +231,7 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
     uint16_t angle;
     int32_t pulses;
 
-#if IS_ENABLED(ZMK_INPUT_AMS_AS5600_LOG_AGC)
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_LOG_AGC)
     /* Log AGC value to console */
     zmk_input_ams_as5600_log_agc(dev);
 #endif
@@ -186,16 +274,37 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
 
     LOG_DBG(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Angle: %d, Last Angle: %d, Pulses: %d", angle, data->last_angle, pulses);
 
-    data->last_angle = angle;
-
     /* Skip the first value to avoid a large initial jump */
     if (!data->last_angle_initialized) {
+        data->last_angle = angle;
         data->last_angle_initialized = true;
+        *reported_pulses = 0;
+        *movement_detected = false;
         return 0;
     }
 
-    /* Only report input when rotation was detected */
-    if (pulses) {
+    data->last_angle = angle;
+
+    if (pulses < 0) {
+        *movement_detected = (-pulses) >= CONFIG_ZMK_INPUT_AMS_AS5600_MOVEMENT_THRESHOLD;
+    } else {
+        *movement_detected = pulses >= CONFIG_ZMK_INPUT_AMS_AS5600_MOVEMENT_THRESHOLD;
+    }
+
+    if (!*movement_detected) {
+        *reported_pulses = 0;
+        return 0;
+    }
+
+    zmk_input_ams_as5600_scale_pulses(data, pulses, reported_pulses);
+
+    return 0;
+}
+
+static int zmk_input_ams_as5600_report_scroll(const struct device *dev, int32_t pulses) {
+    int err;
+
+    if (pulses != 0) {
 #if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
         zmk_input_ams_as5600_apply_resolution_multiplier();
 #endif
@@ -209,32 +318,72 @@ static int zmk_input_ams_as5600_process(const struct device *dev) {
     return 0;
 }
 
+static void zmk_input_ams_as5600_schedule(struct zmk_input_ams_as5600_data *data, int interval_ms) {
+    k_work_reschedule(&data->work, K_MSEC(interval_ms));
+}
+
 static void zmk_input_ams_as5600_work_handler(struct k_work *work) {
-    struct zmk_input_ams_as5600_data *data = CONTAINER_OF(work, struct zmk_input_ams_as5600_data, work);
+    struct zmk_input_ams_as5600_data *data =
+        CONTAINER_OF(work, struct zmk_input_ams_as5600_data, work.work);
+    const struct device *dev = data->dev;
 
-    zmk_input_ams_as5600_process(data->dev);
-}
-
-void zmk_input_ams_as5600_timer_handler(struct k_timer *timer) {
-    struct zmk_input_ams_as5600_data *data = CONTAINER_OF(timer, struct zmk_input_ams_as5600_data, timer);
-
-    k_work_submit(&data->work);
-}
-
-static int zmk_input_ams_as5600_write_configuration(const struct device *dev) {
-    const struct zmk_input_ams_as5600_config *config = dev->config;
-
+    bool movement_detected = false;
+    int32_t reported_pulses = 0;
     int err;
 
-    err = i2c_burst_write_dt(&(config->i2c_port), ZMK_INPUT_AMS_AS5600_CONF_REGISTER, (const uint8_t *)&ZMK_INPUT_AMS_AS5600_CONFIG, sizeof(ZMK_INPUT_AMS_AS5600_CONFIG));
-    if (err) {
-        return err;
+    if (data->mode == ZMK_INPUT_AMS_AS5600_MODE_IDLE) {
+        err = zmk_input_ams_as5600_power_on_and_prepare(dev);
+        if (err) {
+            (void)zmk_input_ams_as5600_set_power(dev, false);
+            zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL);
+            return;
+        }
+
+        err = zmk_input_ams_as5600_process(dev, &reported_pulses, &movement_detected);
+        if (err) {
+            (void)zmk_input_ams_as5600_set_power(dev, false);
+            zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL);
+            return;
+        }
+
+        if (movement_detected) {
+            data->mode = ZMK_INPUT_AMS_AS5600_MODE_ACTIVE;
+            data->last_movement_ms = k_uptime_get();
+            (void)zmk_input_ams_as5600_report_scroll(dev, reported_pulses);
+            zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_ACTIVE_POLL_INTERVAL);
+            return;
+        }
+
+        (void)zmk_input_ams_as5600_set_power(dev, false);
+        zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL);
+        return;
     }
 
-    return 0;
+    err = zmk_input_ams_as5600_power_on_and_prepare(dev);
+    if (err) {
+        zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_ACTIVE_POLL_INTERVAL);
+        return;
+    }
+
+    err = zmk_input_ams_as5600_process(dev, &reported_pulses, &movement_detected);
+    if (!err && movement_detected) {
+        data->last_movement_ms = k_uptime_get();
+        (void)zmk_input_ams_as5600_report_scroll(dev, reported_pulses);
+    }
+
+    if ((k_uptime_get() - data->last_movement_ms) >=
+        CONFIG_ZMK_INPUT_AMS_AS5600_INACTIVITY_TIMEOUT_MS) {
+        data->mode = ZMK_INPUT_AMS_AS5600_MODE_IDLE;
+        (void)zmk_input_ams_as5600_set_power(dev, false);
+        zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL);
+        return;
+    }
+
+    zmk_input_ams_as5600_schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_ACTIVE_POLL_INTERVAL);
 }
 
 static int zmk_input_ams_as5600_initialize(const struct device *dev) {
+    const struct zmk_input_ams_as5600_config *config = dev->config;
     struct zmk_input_ams_as5600_data *data = dev->data;
 
     int err;
@@ -242,17 +391,30 @@ static int zmk_input_ams_as5600_initialize(const struct device *dev) {
     data->dev = dev;
     data->last_angle = 0;
     data->last_angle_initialized = false;
+    data->scaled_remainder = 0;
+    data->mode = ZMK_INPUT_AMS_AS5600_MODE_IDLE;
+    data->last_movement_ms = k_uptime_get();
+    data->sensor_powered = false;
+    data->sensor_configured = false;
 
-    err = zmk_input_ams_as5600_write_configuration(dev);
-    if (err) {
-        LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Failed to write configuration: %d", err);
-        return err;
+    if (config->power_gpio.port != NULL) {
+        if (!device_is_ready(config->power_gpio.port)) {
+            LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Power GPIO is not ready");
+            return -ENODEV;
+        }
+
+        err = gpio_pin_configure_dt(&config->power_gpio, GPIO_OUTPUT_INACTIVE);
+        if (err) {
+            LOG_ERR(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Failed to configure power GPIO: %d", err);
+            return err;
+        }
+    } else {
+        data->sensor_powered = true;
+        data->sensor_configured = false;
     }
 
-    k_work_init(&data->work, &zmk_input_ams_as5600_work_handler);
-
-    k_timer_init(&data->timer, &zmk_input_ams_as5600_timer_handler, NULL);
-    k_timer_start(&data->timer, K_MSEC(CONFIG_ZMK_INPUT_AMS_AS5600_POLL_INTERVAL), K_MSEC(CONFIG_ZMK_INPUT_AMS_AS5600_POLL_INTERVAL));
+    k_work_init_delayable(&data->work, &zmk_input_ams_as5600_work_handler);
+    zmk_input_ams_as5600_schedule(data, 0);
 
     LOG_INF(ZMK_INPUT_AMS_AS5600_LOG_PREFIX "Device %s initialized", dev->name);
 
@@ -262,7 +424,8 @@ static int zmk_input_ams_as5600_initialize(const struct device *dev) {
 #define ZMK_INPUT_AMS_AS5600_INIT(n)                               \
     static struct zmk_input_ams_as5600_data zmk_input_ams_as5600_data##n;                      \
     static const struct zmk_input_ams_as5600_config zmk_input_ams_as5600_cfg##n = {            \
-        .i2c_port = I2C_DT_SPEC_INST_GET(n)};                      \
+        .i2c_port = I2C_DT_SPEC_INST_GET(n), \
+        .power_gpio = GPIO_DT_SPEC_INST_GET_OR(n, power_gpios, {0})};                      \
                                                                    \
     DEVICE_DT_INST_DEFINE(n, zmk_input_ams_as5600_initialize, NULL,              \
                           &zmk_input_ams_as5600_data##n, &zmk_input_ams_as5600_cfg##n,         \
