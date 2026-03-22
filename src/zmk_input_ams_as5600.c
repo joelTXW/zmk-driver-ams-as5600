@@ -19,10 +19,11 @@
 #include <zephyr/sys/byteorder.h>
 #include <string.h>
 
-#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
+/* ─────────── ZMK transport type declarations (always needed) ─────────── */
 /*
- * Minimal forward declarations to stay source-compatible across ZMK versions
- * without pulling in app-level headers.
+ * Minimal forward declarations for ZMK endpoint / transport types.
+ * Kept local to avoid hard dependency on app-level headers that may
+ * not be on the include path for out-of-tree modules.
  */
 enum zmk_transport {
     ZMK_TRANSPORT_NONE = 0,
@@ -44,6 +45,10 @@ struct zmk_endpoint_instance {
     };
 };
 
+/* Returns the currently selected endpoint (USB or BLE profile). */
+struct zmk_endpoint_instance zmk_endpoints_selected(void);
+
+#if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
 struct zmk_pointing_resolution_multipliers {
     uint8_t wheel;
     uint8_t hor_wheel;
@@ -53,11 +58,6 @@ int  zmk_ble_active_profile_index(void);
 void zmk_pointing_resolution_multipliers_set_profile(
     struct zmk_pointing_resolution_multipliers multipliers,
     struct zmk_endpoint_instance endpoint);
-#endif
-
-/* Runtime USB-ready check (declared by ZMK USB subsystem). */
-#if IS_ENABLED(CONFIG_ZMK_USB)
-bool zmk_usb_is_hid_ready(void);
 #endif
 
 #include "zmk_input_ams_as5600/zmk_input_ams_as5600_config.h"
@@ -87,22 +87,23 @@ LOG_MODULE_REGISTER(zmk_input_ams_as5600, CONFIG_INPUT_LOG_LEVEL);
 /* ──────────────────── Timing / polling constants ──────────────────────── */
 
 /* USB: always-on, fastest polling, no idle */
-#define USB_POLL_INTERVAL_MS   1
+#define USB_POLL_INTERVAL_MS  1
 
-/* BLE active (LPM1 – AS5600 samples every ~5 ms) */
-#ifndef CONFIG_ZMK_INPUT_AMS_AS5600_BLE_ACTIVE_POLL_MS
-#define CONFIG_ZMK_INPUT_AMS_AS5600_BLE_ACTIVE_POLL_MS  5
-#endif
+/*
+ * BLE active – use the user's Kconfig-tuned active poll interval.
+ * AS5600 LPM1 samples every ~4.4 ms; polling the MCU faster just re-reads
+ * the same value but keeps latency minimal for the first new sample.
+ */
+#define BLE_ACTIVE_POLL_MS  CONFIG_ZMK_INPUT_AMS_AS5600_ACTIVE_POLL_INTERVAL
 
-/* BLE low-power (LPM2 – AS5600 samples every ~20 ms) */
+/* BLE low-power (LPM2 – AS5600 samples every ~18 ms) */
 #ifndef CONFIG_ZMK_INPUT_AMS_AS5600_BLE_LP_POLL_MS
 #define CONFIG_ZMK_INPUT_AMS_AS5600_BLE_LP_POLL_MS  20
 #endif
+#define BLE_LP_POLL_MS  CONFIG_ZMK_INPUT_AMS_AS5600_BLE_LP_POLL_MS
 
 /* BLE idle (sensor off, wake-check interval) */
-#ifndef CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS
-#define CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS  CONFIG_ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL
-#endif
+#define BLE_IDLE_POLL_MS  CONFIG_ZMK_INPUT_AMS_AS5600_IDLE_POLL_INTERVAL
 
 /* BLE: ms of inactivity before ACTIVE (LPM1) → LOW_POWER (LPM2) */
 #define BLE_ACTIVE_TO_LP_MS   300
@@ -158,16 +159,19 @@ struct zmk_input_ams_as5600_data {
 /* ─────────────────── Transport detection helper ──────────────────────── */
 
 /**
- * Return true when the device is operating in USB mode.
+ * Return true when the *selected* transport is USB HID.
  *
- * Build configs handled:
+ * Uses zmk_endpoints_selected() so that plugging in USB for charging
+ * while BLE is the active transport correctly returns false.
+ *
+ * Build configs:
  *   - USB only  → always true
  *   - BLE only  → always false
- *   - USB + BLE → runtime check via zmk_usb_is_hid_ready()
+ *   - USB + BLE → runtime check of selected endpoint
  */
 static inline bool is_usb_mode(void) {
 #if IS_ENABLED(CONFIG_ZMK_USB) && IS_ENABLED(CONFIG_ZMK_BLE)
-    return zmk_usb_is_hid_ready();
+    return zmk_endpoints_selected().transport == ZMK_TRANSPORT_USB;
 #elif IS_ENABLED(CONFIG_ZMK_USB)
     return true;
 #else
@@ -270,11 +274,15 @@ static int set_power(const struct device *dev, bool on) {
 
     data->sensor_powered = on;
     if (!on) {
-        data->sensor_configured      = false;
-        data->last_angle_initialized = false;   /* BUG FIX: reset so first read
-                                                   after power-on doesn't produce
-                                                   a stale-angle jump */
-        data->scaled_remainder       = 0;
+        data->sensor_configured = false;
+        data->scaled_remainder  = 0;
+        /*
+         * IMPORTANT: Do NOT reset last_angle_initialized here.
+         * Keeping the stale last_angle lets the idle-wake check detect
+         * that the dial moved while the sensor was powered off.
+         * The movement-threshold filter already rejects noise-level
+         * differences.
+         */
     }
     return 0;
 }
@@ -347,11 +355,11 @@ static int process_angle(const struct device *dev, int32_t *reported_pulses,
     }
 #endif
 
-    /* BUG FIX: mask to 12 bits – upper nibble of high byte is undefined */
+    /* Mask to 12 bits – upper nibble of high byte is undefined */
     uint16_t angle = (((uint16_t)buf[READ_OFF_ANGLE_HI] << 8)
                     | buf[READ_OFF_ANGLE_LO]) & AS5600_ANGLE_MASK;
 
-    /* First valid sample after power-on: seed last_angle, report nothing */
+    /* First valid sample after boot: seed last_angle, report nothing */
     if (!data->last_angle_initialized) {
         data->last_angle             = angle;
         data->last_angle_initialized = true;
@@ -432,9 +440,9 @@ static void work_handler_usb(struct zmk_input_ams_as5600_data *data) {
 /* ══════════════════════ BLE work handler ═════════════════════════════════
  *
  * Three-tier power management:
- *   ACTIVE     – LPM1, poll every ~5 ms
+ *   ACTIVE     – LPM1, poll at user-configured active interval
  *   LOW_POWER  – LPM2, poll every ~20 ms  (after 300 ms inactivity)
- *   IDLE       – sensor off, poll every idle interval (after 2 s total)
+ *   IDLE       – sensor off, poll at idle interval (after 2 s total)
  *
  * Any detected movement promotes back to ACTIVE / LPM1.
  * ════════════════════════════════════════════════════════════════════════ */
@@ -459,24 +467,26 @@ static void work_handler_ble(struct zmk_input_ams_as5600_data *data) {
         err = power_on_and_configure(dev, AS5600_PM_LPM1);
         if (err) {
             (void)set_power(dev, false);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS);
+            schedule(data, BLE_IDLE_POLL_MS);
             return;
         }
 
         err = process_angle(dev, &pulses, &moved);
         if (err) {
             (void)set_power(dev, false);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS);
+            schedule(data, BLE_IDLE_POLL_MS);
             return;
         }
 
         if (moved) {
+            /* Wake up – stay powered on, switch to active */
             ble_enter_active(data);
             (void)report_scroll(dev, pulses);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_ACTIVE_POLL_MS);
+            schedule(data, BLE_ACTIVE_POLL_MS);
         } else {
+            /* No movement – power off, check again later */
             (void)set_power(dev, false);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS);
+            schedule(data, BLE_IDLE_POLL_MS);
         }
         return;
 
@@ -484,17 +494,17 @@ static void work_handler_ble(struct zmk_input_ams_as5600_data *data) {
     case ZMK_INPUT_AMS_AS5600_MODE_LOW_POWER:
         err = power_on_and_configure(dev, AS5600_PM_LPM2);
         if (err) {
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_LP_POLL_MS);
+            schedule(data, BLE_LP_POLL_MS);
             return;
         }
 
         err = process_angle(dev, &pulses, &moved);
         if (!err && moved) {
-            /* Promote to active */
+            /* Promote back to active */
             ble_enter_active(data);
             (void)as5600_write_conf(dev, AS5600_PM_LPM1);
             (void)report_scroll(dev, pulses);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_ACTIVE_POLL_MS);
+            schedule(data, BLE_ACTIVE_POLL_MS);
             return;
         }
 
@@ -502,12 +512,12 @@ static void work_handler_ble(struct zmk_input_ams_as5600_data *data) {
         idle_ms = now - data->last_movement_ms;
 
         if (idle_ms >= BLE_ACTIVE_TO_IDLE_MS) {
-            /* Transition to IDLE – power off */
+            /* Transition to IDLE – power off sensor */
             data->mode = ZMK_INPUT_AMS_AS5600_MODE_IDLE;
             (void)set_power(dev, false);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS);
+            schedule(data, BLE_IDLE_POLL_MS);
         } else {
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_LP_POLL_MS);
+            schedule(data, BLE_LP_POLL_MS);
         }
         return;
 
@@ -515,7 +525,7 @@ static void work_handler_ble(struct zmk_input_ams_as5600_data *data) {
     case ZMK_INPUT_AMS_AS5600_MODE_ACTIVE:
         err = power_on_and_configure(dev, AS5600_PM_LPM1);
         if (err) {
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_ACTIVE_POLL_MS);
+            schedule(data, BLE_ACTIVE_POLL_MS);
             return;
         }
 
@@ -532,14 +542,14 @@ static void work_handler_ble(struct zmk_input_ams_as5600_data *data) {
             /* Straight to idle (edge case: very long single poll gap) */
             data->mode = ZMK_INPUT_AMS_AS5600_MODE_IDLE;
             (void)set_power(dev, false);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_IDLE_POLL_MS);
+            schedule(data, BLE_IDLE_POLL_MS);
         } else if (idle_ms >= BLE_ACTIVE_TO_LP_MS) {
             /* Demote to low-power */
             data->mode = ZMK_INPUT_AMS_AS5600_MODE_LOW_POWER;
             (void)as5600_write_conf(dev, AS5600_PM_LPM2);
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_LP_POLL_MS);
+            schedule(data, BLE_LP_POLL_MS);
         } else {
-            schedule(data, CONFIG_ZMK_INPUT_AMS_AS5600_BLE_ACTIVE_POLL_MS);
+            schedule(data, BLE_ACTIVE_POLL_MS);
         }
         return;
     }
