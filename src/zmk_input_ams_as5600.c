@@ -45,8 +45,27 @@ struct zmk_endpoint_instance {
     };
 };
 
-/* Returns the currently selected endpoint (USB or BLE profile). */
-struct zmk_endpoint_instance zmk_endpoints_selected(void);
+/*
+ * Returns the currently selected endpoint (USB or BLE profile).
+ * Support both historical and current ZMK symbol names so this
+ * out-of-tree module stays buildable across ZMK revisions.
+ */
+extern struct zmk_endpoint_instance zmk_endpoint_get_selected(void)
+    __attribute__((weak));
+extern struct zmk_endpoint_instance zmk_endpoints_selected(void)
+    __attribute__((weak));
+
+static inline struct zmk_endpoint_instance get_selected_endpoint(void) {
+    if (zmk_endpoint_get_selected != NULL) {
+        return zmk_endpoint_get_selected();
+    }
+    if (zmk_endpoints_selected != NULL) {
+        return zmk_endpoints_selected();
+    }
+
+    /* Fallback if neither symbol is linked in this build variant. */
+    return (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_NONE};
+}
 
 #if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
 struct zmk_pointing_resolution_multipliers {
@@ -161,7 +180,7 @@ struct zmk_input_ams_as5600_data {
 /**
  * Return true when the *selected* transport is USB HID.
  *
- * Uses zmk_endpoints_selected() so that plugging in USB for charging
+ * Uses selected endpoint transport so that plugging in USB for charging
  * while BLE is the active transport correctly returns false.
  *
  * Build configs:
@@ -171,7 +190,7 @@ struct zmk_input_ams_as5600_data {
  */
 static inline bool is_usb_mode(void) {
 #if IS_ENABLED(CONFIG_ZMK_USB) && IS_ENABLED(CONFIG_ZMK_BLE)
-    return zmk_endpoints_selected().transport == ZMK_TRANSPORT_USB;
+    return get_selected_endpoint().transport == ZMK_TRANSPORT_USB;
 #elif IS_ENABLED(CONFIG_ZMK_USB)
     return true;
 #else
