@@ -19,7 +19,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <string.h>
 
-#include <zmk/endpoints.h>
+#include <zmk/endpoints_types.h>
 
 #if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
 #include <zmk/ble.h>
@@ -122,6 +122,21 @@ struct zmk_input_ams_as5600_data {
     struct k_work_delayable        work;
 };
 
+/* Support both historical and current ZMK selected-endpoint APIs. */
+extern struct zmk_endpoint_instance zmk_endpoint_get_selected(void) __attribute__((weak));
+extern struct zmk_endpoint_instance zmk_endpoints_selected(void) __attribute__((weak));
+
+static inline struct zmk_endpoint_instance endpoint_selected_compat(void) {
+    if (zmk_endpoint_get_selected != NULL) {
+        return zmk_endpoint_get_selected();
+    }
+    if (zmk_endpoints_selected != NULL) {
+        return zmk_endpoints_selected();
+    }
+
+    return (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_NONE};
+}
+
 /* ─────────────────── Transport detection helper ──────────────────────── */
 
 /**
@@ -137,7 +152,7 @@ struct zmk_input_ams_as5600_data {
  */
 static inline bool is_usb_mode(void) {
 #if IS_ENABLED(CONFIG_ZMK_USB) && IS_ENABLED(CONFIG_ZMK_BLE)
-    return zmk_endpoint_get_selected().transport == ZMK_TRANSPORT_USB;
+    return endpoint_selected_compat().transport == ZMK_TRANSPORT_USB;
 #elif IS_ENABLED(CONFIG_ZMK_USB)
     return true;
 #else
