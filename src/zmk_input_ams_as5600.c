@@ -126,6 +126,18 @@ struct zmk_input_ams_as5600_data {
 extern struct zmk_endpoint_instance zmk_endpoint_get_selected(void) __attribute__((weak));
 extern struct zmk_endpoint_instance zmk_endpoints_selected(void) __attribute__((weak));
 
+static inline enum zmk_transport endpoint_fallback_transport(void) {
+#ifdef ZMK_TRANSPORT_NONE
+    return ZMK_TRANSPORT_NONE;
+#elif defined(ZMK_TRANSPORT_BLE)
+    return ZMK_TRANSPORT_BLE;
+#elif defined(ZMK_TRANSPORT_USB)
+    return ZMK_TRANSPORT_USB;
+#else
+    return (enum zmk_transport)0;
+#endif
+}
+
 static inline struct zmk_endpoint_instance endpoint_selected_compat(void) {
     if (zmk_endpoint_get_selected != NULL) {
         return zmk_endpoint_get_selected();
@@ -134,7 +146,7 @@ static inline struct zmk_endpoint_instance endpoint_selected_compat(void) {
         return zmk_endpoints_selected();
     }
 
-    return (struct zmk_endpoint_instance){.transport = ZMK_TRANSPORT_NONE};
+    return (struct zmk_endpoint_instance){.transport = endpoint_fallback_transport()};
 }
 
 /* ─────────────────── Transport detection helper ──────────────────────── */
