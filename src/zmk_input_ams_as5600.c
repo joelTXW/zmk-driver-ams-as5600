@@ -8,39 +8,9 @@
 #include <zephyr/sys/byteorder.h>
 
 #if IS_ENABLED(CONFIG_ZMK_INPUT_AMS_AS5600_SET_HID_RESOLUTION_MULTIPLIER)
-/*
- * This module is compiled with ZMK's module include path, which may not expose
- * app headers such as zmk/endpoints.h across all ZMK versions. Keep minimal
- * local declarations to stay source-compatible.
- */
-enum zmk_transport {
-    ZMK_TRANSPORT_NONE = 0,
-    ZMK_TRANSPORT_USB = 1,
-    ZMK_TRANSPORT_BLE = 2,
-};
-
-struct zmk_transport_usb_data {};
-
-struct zmk_transport_ble_data {
-    int profile_index;
-};
-
-struct zmk_endpoint_instance {
-    enum zmk_transport transport;
-    union {
-        struct zmk_transport_usb_data usb;
-        struct zmk_transport_ble_data ble;
-    };
-};
-
-struct zmk_pointing_resolution_multipliers {
-    uint8_t wheel;
-    uint8_t hor_wheel;
-};
-
-int zmk_ble_active_profile_index(void);
-void zmk_pointing_resolution_multipliers_set_profile(
-    struct zmk_pointing_resolution_multipliers multipliers, struct zmk_endpoint_instance endpoint);
+#include <zmk/ble.h>
+#include <zmk/endpoints.h>
+#include <zmk/pointing/resolution_multipliers.h>
 #endif
 
 #include "zmk_input_ams_as5600/zmk_input_ams_as5600_config.h"
